@@ -14,6 +14,9 @@ SSH连接管理模块 - AsyncSSH版本
 
 import asyncio
 import time
+import json
+import os
+import hashlib
 from typing import Optional, Dict, Any
 import asyncssh
 from PySide6.QtCore import QObject, Signal as pyqtSignal, QTimer
@@ -21,6 +24,83 @@ from core.logger import get_logger
 
 
 logger = get_logger("SSHConnection")
+
+
+KNOWN_HOSTS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'known_hosts.json')
+
+
+class KnownHostsManager:
+    """TOFU (Trust On First Use) 主机密钥管理器"""
+    
+    def __init__(self, hosts_file: str = KNOWN_HOSTS_FILE):
+        self._hosts_file = hosts_file
+        self._hosts: Dict[str, Dict[str, str]] = {}
+        self._load()
+    
+    def _load(self):
+        """加载已知主机列表"""
+        try:
+            if os.path.exists(self._hosts_file):
+                with open(self._hosts_file, 'r', encoding='utf-8') as f:
+                    self._hosts = json.load(f)
+                logger.debug(f"已加载 {len(self._hosts)} 个已知主机")
+        except Exception as e:
+            logger.warning(f"加载已知主机文件失败: {e}")
+            self._hosts = {}
+    
+    def _save(self):
+        """保存已知主机列表"""
+        try:
+            os.makedirs(os.path.dirname(self._hosts_file), exist_ok=True)
+            with open(self._hosts_file, 'w', encoding='utf-8') as f:
+                json.dump(self._hosts, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"保存已知主机文件失败: {e}")
+    
+    def _make_key(self, host: str, port: int) -> str:
+        """生成主机标识键"""
+        return f"{host}:{port}"
+    
+    def check_host_key(self, host: str, port: int, host_key: str) -> str:
+        """
+        检查主机密钥
+        
+        Returns:
+            'new': 新主机，首次连接
+            'match': 密钥匹配
+            'mismatch': 密钥不匹配（可能中间人攻击）
+        """
+        key = self._make_key(host, port)
+        host_key_hash = hashlib.sha256(host_key.encode()).hexdigest()
+        
+        if key not in self._hosts:
+            return 'new'
+        
+        stored_hash = self._hosts[key].get('host_key_hash', '')
+        if stored_hash == host_key_hash:
+            return 'match'
+        
+        return 'mismatch'
+    
+    def add_host(self, host: str, port: int, host_key: str):
+        """添加或更新主机密钥"""
+        key = self._make_key(host, port)
+        host_key_hash = hashlib.sha256(host_key.encode()).hexdigest()
+        self._hosts[key] = {
+            'host': host,
+            'port': port,
+            'host_key_hash': host_key_hash,
+            'added_at': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+        self._save()
+        logger.info(f"已保存主机密钥: {host}:{port}")
+    
+    def remove_host(self, host: str, port: int):
+        """移除已知主机"""
+        key = self._make_key(host, port)
+        if key in self._hosts:
+            del self._hosts[key]
+            self._save()
 
 
 class MySSHSession(asyncssh.SSHClientSession):
@@ -83,6 +163,9 @@ class SSHConnection(QObject):
     
     def __init__(self):
         super().__init__()
+        
+        # 主机密钥管理器 (TOFU)
+        self._known_hosts_mgr = KnownHostsManager()
         
         # AsyncSSH核心对象
         self.conn: Optional[asyncssh.SSHClientConnection] = None
@@ -205,8 +288,8 @@ class SSHConnection(QObject):
                 'host': host,
                 'port': port,
                 'username': username,
-                'known_hosts': None,  # 跳过主机密钥验证
                 'connect_timeout': timeout,
+                'known_hosts': None,  # 先接受任意密钥，连接后再做 TOFU 验证
             }
             
             # 认证方式
@@ -222,6 +305,30 @@ class SSHConnection(QObject):
             
             # 建立连接
             self.conn = await asyncssh.connect(**connect_kwargs)
+            
+            # TOFU 主机密钥验证（连接建立后进行）
+            host_key = self.conn.get_server_host_key()
+            host_key_str = host_key.export_public_key()
+            if isinstance(host_key_str, bytes):
+                host_key_str = host_key_str.decode('ascii')
+            
+            key_status = self._known_hosts_mgr.check_host_key(host, port, host_key_str)
+            
+            if key_status == 'new':
+                self._known_hosts_mgr.add_host(host, port, host_key_str)
+                logger.info(f"TOFU: 首次连接 {host}:{port}, 已保存主机密钥")
+            elif key_status == 'mismatch':
+                self.conn.close()
+                try:
+                    await self.conn.wait_closed()
+                except Exception:
+                    pass
+                error_msg = f"主机密钥验证失败: {host}:{port}\n密钥不匹配，可能存在中间人攻击!"
+                logger.error(error_msg)
+                self._set_state(self.STATE_DISCONNECTED)
+                self.error_occurred.emit(error_msg)
+                self.connection_status.emit("error")
+                return
             
             # 打开交互式shell
             self.chan, self.process = await self.conn.create_session(
@@ -255,6 +362,13 @@ class SSHConnection(QObject):
             
         except asyncssh.PermissionDenied as e:
             error_msg = "认证失败: 用户名、密码或私钥错误"
+            logger.error(error_msg)
+            self._set_state(self.STATE_DISCONNECTED)
+            self.error_occurred.emit(error_msg)
+            self.connection_status.emit("error")
+        
+        except asyncssh.HostKeyNotVerifiable as e:
+            error_msg = f"主机密钥验证失败: {host}:{port} 密钥不匹配，可能存在中间人攻击!"
             logger.error(error_msg)
             self._set_state(self.STATE_DISCONNECTED)
             self.error_occurred.emit(error_msg)

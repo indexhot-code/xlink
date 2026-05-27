@@ -583,6 +583,54 @@ class ThemeManager:
         "dark": DARK_THEME
     }
     
+    # 终端配色方案
+    TERMINAL_COLORS = {
+        "light": {
+            "background": "#ffffff",
+            "foreground": "#333333",
+            "cursor": "#2196F3",
+            "selection": "#bbdefb",
+            "black": "#212121",
+            "red": "#c62828",
+            "green": "#2e7d32",
+            "yellow": "#f9a825",
+            "blue": "#1565c0",
+            "magenta": "#6a1b9a",
+            "cyan": "#00838f",
+            "white": "#bdbdbd",
+            "bright_black": "#616161",
+            "bright_red": "#ef5350",
+            "bright_green": "#66bb6a",
+            "bright_yellow": "#ffee58",
+            "bright_blue": "#42a5f5",
+            "bright_magenta": "#ab47bc",
+            "bright_cyan": "#26c6da",
+            "bright_white": "#f5f5f5",
+        },
+        "dark": {
+            "background": "#1e1e1e",
+            "foreground": "#d4d4d4",
+            "cursor": "#ffffff",
+            "selection": "#264f78",
+            "black": "#000000",
+            "red": "#cd3131",
+            "green": "#0dbc79",
+            "yellow": "#e5e510",
+            "blue": "#2472c8",
+            "magenta": "#bc3fbc",
+            "cyan": "#11a8cd",
+            "white": "#e5e5e5",
+            "bright_black": "#666666",
+            "bright_red": "#f14c4c",
+            "bright_green": "#23d18b",
+            "bright_yellow": "#f5f543",
+            "bright_blue": "#3b8eea",
+            "bright_magenta": "#d670d6",
+            "bright_cyan": "#29b8db",
+            "bright_white": "#ffffff",
+        }
+    }
+    
     @staticmethod
     def get_theme(theme_name: str) -> str:
         """
@@ -595,6 +643,19 @@ class ThemeManager:
             QSS样式表字符串
         """
         return ThemeManager.THEMES.get(theme_name, LIGHT_THEME)
+    
+    @staticmethod
+    def get_terminal_colors(theme_name: str = "dark") -> dict:
+        """
+        获取终端配色方案
+        
+        Args:
+            theme_name: 主题名称 (light/dark)
+            
+        Returns:
+            终端配色字典
+        """
+        return ThemeManager.TERMINAL_COLORS.get(theme_name, ThemeManager.TERMINAL_COLORS["dark"])
     
     @staticmethod
     def get_available_themes() -> list:

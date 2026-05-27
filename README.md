@@ -150,7 +150,6 @@ XLink/
 │   └── sessions.json           # Session configurations (auto-generated)
 ├── core/
 │   ├── __init__.py
-│   ├── async_event_loop.py     # Global async event loop manager
 │   ├── logger.py               # Logging system
 │   ├── password_encryption.py  # Password encryption utilities
 │   ├── session_manager.py      # Session configuration management
@@ -341,7 +340,6 @@ XLink/
 │   └── sessions.json           # 会话配置存储(自动生成)
 ├── core/
 │   ├── __init__.py
-│   ├── async_event_loop.py     # 全局异步事件循环管理器
 │   ├── logger.py               # 日志系统
 │   ├── password_encryption.py  # 密码加密工具
 │   ├── session_manager.py      # 会话配置管理

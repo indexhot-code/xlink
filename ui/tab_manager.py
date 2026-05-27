@@ -9,6 +9,7 @@ from PySide6.QtCore import Signal as pyqtSignal, Qt
 from PySide6.QtGui import QAction
 from ui.terminal_widget import TerminalWidget
 from core.ssh_manager import SSHConnection
+from ui.theme import ThemeManager
 
 
 class TabManager(QTabWidget):
@@ -36,6 +37,18 @@ class TabManager(QTabWidget):
         
         # 存储每个标签页的SSH连接
         self.connections = {}
+        
+        # 当前主题
+        self._current_theme = "dark"
+    
+    def set_theme(self, theme: str):
+        """设置主题并更新所有终端配色"""
+        self._current_theme = theme
+        terminal_colors = ThemeManager.get_terminal_colors(theme)
+        for i in range(self.count()):
+            widget = self.widget(i)
+            if hasattr(widget, 'set_terminal_colors'):
+                widget.set_terminal_colors(terminal_colors)
     
     def create_new_tab(self, session_data: dict):
         """
@@ -49,6 +62,9 @@ class TabManager(QTabWidget):
         # 创建终端控件
         terminal = TerminalWidget(self.font_size)
         terminal.setMinimumWidth(400)
+        
+        terminal_colors = ThemeManager.get_terminal_colors(self._current_theme)
+        terminal.set_terminal_colors(terminal_colors)
         
         # 创建SSH连接
         connection = SSHConnection()

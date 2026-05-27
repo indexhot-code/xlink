@@ -16,14 +16,16 @@ class Cell:
     bg_color: str = '#1E1E1E'  # 默认背景色
     bold: bool = False
     underline: bool = False
+    reverse: bool = False  # 反向视频
     
-    def reset(self):
+    def reset(self, fg: str = '#D4D4D4', bg: str = '#1E1E1E'):
         """重置单元格"""
         self.char = ' '
-        self.fg_color = '#D4D4D4'
-        self.bg_color = '#1E1E1E'
+        self.fg_color = fg
+        self.bg_color = bg
         self.bold = False
         self.underline = False
+        self.reverse = False
 
 
 class VirtualScreen:
@@ -35,17 +37,22 @@ class VirtualScreen:
     
     MAX_SCROLLBACK_ROWS = 10000  # 滚动缓冲区最大行数
     
-    def __init__(self, rows: int = 24, cols: int = 80):
+    def __init__(self, rows: int = 24, cols: int = 80, 
+                 default_fg: str = '#D4D4D4', default_bg: str = '#1E1E1E'):
         """
         初始化虚拟屏幕
         
         Args:
             rows: 屏幕行数(默认24)
             cols: 屏幕列数(默认80)
+            default_fg: 默认前景色(默认'#D4D4D4')
+            default_bg: 默认背景色(默认'#1E1E1E')
         """
         self.rows = rows
         self.cols = cols
-        self.cells = [[Cell() for _ in range(cols)] for _ in range(rows)]
+        self.default_fg = default_fg
+        self.default_bg = default_bg
+        self.cells = [[Cell(fg_color=default_fg, bg_color=default_bg) for _ in range(cols)] for _ in range(rows)]
         self.cursor_row = 0
         self.cursor_col = 0
         self.modified_rows: Set[int] = set()  # 追踪修改的行,用于增量渲染
@@ -54,6 +61,15 @@ class VirtualScreen:
         # 滚动区域(默认整个屏幕)
         self.scroll_top = 0
         self.scroll_bottom = rows - 1
+        
+        # 备用屏幕缓冲区(用于 vim/less/top 等 TUI 程序)
+        self._alt_screen_active = False
+        self._main_cells = None
+        self._main_cursor = (0, 0)
+        self._main_modified_rows = set()
+        self._main_modified_cols = {}
+        self._main_scroll_top = 0
+        self._main_scroll_bottom = rows - 1
         
         # 滚动缓冲区(scrollback buffer)
         self.scrollback_buffer: List[List[Cell]] = []  # 保存超出屏幕的历史行
@@ -91,6 +107,10 @@ class VirtualScreen:
         """光标左移"""
         self.cursor_col = max(0, self.cursor_col - n)
     
+    def _reset_cell(self, row: int, col: int):
+        """重置指定单元格为默认状态"""
+        self.cells[row][col].reset(self.default_fg, self.default_bg)
+    
     def write_char(self, char: str, attrs: Optional[dict] = None):
         """
         在当前光标位置写入字符
@@ -118,6 +138,7 @@ class VirtualScreen:
         cell.bg_color = attrs.get('bg', '#1E1E1E')
         cell.bold = attrs.get('bold', False)
         cell.underline = attrs.get('underline', False)
+        cell.reverse = attrs.get('reverse', False)
         
         # 标记此行已修改
         self.modified_rows.add(self.cursor_row)
@@ -194,7 +215,7 @@ class VirtualScreen:
             # 清整个屏幕
             for row in range(self.rows):
                 for col in range(self.cols):
-                    self.cells[row][col].reset()
+                    self._reset_cell(row, col)
             self.modified_rows = set(range(self.rows))
             self.modified_cols = {r: [0, self.cols - 1] for r in range(self.rows)}
             self.cursor_row = 0
@@ -203,7 +224,7 @@ class VirtualScreen:
             # 从光标到屏幕底部
             # 先清除光标所在行的右侧
             for col in range(self.cursor_col, self.cols):
-                self.cells[self.cursor_row][col].reset()
+                self._reset_cell(self.cursor_row, col)
             self.modified_rows.add(self.cursor_row)
             # 更新修改的列范围
             if self.cursor_row not in self.modified_cols:
@@ -215,7 +236,7 @@ class VirtualScreen:
             # 再清除下面的所有行
             for row in range(self.cursor_row + 1, self.rows):
                 for col in range(self.cols):
-                    self.cells[row][col].reset()
+                    self._reset_cell(row, col)
                 self.modified_rows.add(row)
                 self.modified_cols[row] = [0, self.cols - 1]
         elif mode == 1:
@@ -223,13 +244,13 @@ class VirtualScreen:
             # 先清除上面的所有行
             for row in range(0, self.cursor_row):
                 for col in range(self.cols):
-                    self.cells[row][col].reset()
+                    self._reset_cell(row, col)
                 self.modified_rows.add(row)
                 self.modified_cols[row] = [0, self.cols - 1]
             
             # 再清除光标所在行的左侧
             for col in range(0, self.cursor_col + 1):
-                self.cells[self.cursor_row][col].reset()
+                self._reset_cell(self.cursor_row, col)
             self.modified_rows.add(self.cursor_row)
             # 更新修改的列范围
             if self.cursor_row not in self.modified_cols:
@@ -251,7 +272,7 @@ class VirtualScreen:
         if mode == 0:
             # 从光标到行尾
             for col in range(self.cursor_col, self.cols):
-                self.cells[self.cursor_row][col].reset()
+                self._reset_cell(self.cursor_row, col)
             # 更新修改的列范围
             if self.cursor_row not in self.modified_cols:
                 self.modified_cols[self.cursor_row] = [self.cursor_col, self.cols - 1]
@@ -261,7 +282,7 @@ class VirtualScreen:
         elif mode == 1:
             # 从行首到光标
             for col in range(0, self.cursor_col + 1):
-                self.cells[self.cursor_row][col].reset()
+                self._reset_cell(self.cursor_row, col)
             # 更新修改的列范围
             if self.cursor_row not in self.modified_cols:
                 self.modified_cols[self.cursor_row] = [0, self.cursor_col]
@@ -271,7 +292,7 @@ class VirtualScreen:
         elif mode == 2:
             # 整行
             for col in range(self.cols):
-                self.cells[self.cursor_row][col].reset()
+                self._reset_cell(self.cursor_row, col)
             self.modified_cols[self.cursor_row] = [0, self.cols - 1]
         
         self.modified_rows.add(self.cursor_row)
@@ -287,7 +308,7 @@ class VirtualScreen:
             
             # 光标所在行清空
             for col in range(self.cols):
-                self.cells[self.cursor_row][col].reset()
+                self._reset_cell(self.cursor_row, col)
             self.modified_rows.add(self.cursor_row)
     
     def delete_line(self, n: int = 1):
@@ -300,19 +321,58 @@ class VirtualScreen:
             
             # 滚动区域底部的新行清空
             for col in range(self.cols):
-                self.cells[self.scroll_bottom][col].reset()
+                self._reset_cell(self.scroll_bottom, col)
             self.modified_rows.add(self.scroll_bottom)
+    
+    def enable_alt_screen(self):
+        """切换到备用屏幕缓冲区（保存主屏幕状态）"""
+        if self._alt_screen_active:
+            return
+        
+        self._main_cells = self.cells
+        self._main_cursor = (self.cursor_row, self.cursor_col)
+        self._main_modified_rows = self.modified_rows.copy()
+        self._main_modified_cols = {k: v[:] for k, v in self.modified_cols.items()}
+        self._main_scroll_top = self.scroll_top
+        self._main_scroll_bottom = self.scroll_bottom
+        
+        self.cells = [[Cell(fg_color=self.default_fg, bg_color=self.default_bg) for _ in range(self.cols)] for _ in range(self.rows)]
+        self.cursor_row = 0
+        self.cursor_col = 0
+        self.modified_rows = set(range(self.rows))
+        self.modified_cols = {r: [0, self.cols - 1] for r in range(self.rows)}
+        self.scroll_top = 0
+        self.scroll_bottom = self.rows - 1
+        self._alt_screen_active = True
+    
+    def disable_alt_screen(self):
+        """恢复到主屏幕缓冲区"""
+        if not self._alt_screen_active:
+            return
+        
+        self.cells = self._main_cells
+        self.cursor_row, self.cursor_col = self._main_cursor
+        self.modified_rows = self._main_modified_rows
+        self.modified_cols = self._main_modified_cols
+        self.scroll_top = self._main_scroll_top
+        self.scroll_bottom = self._main_scroll_bottom
+        self._main_cells = None
+        self._alt_screen_active = False
+    
+    @property
+    def is_alt_screen_active(self) -> bool:
+        """是否处于备用屏幕模式"""
+        return self._alt_screen_active
     
     def _scroll_up(self):
         """向上滚动一行(在滚动区域内)"""
-        # 将滚动区域顶部的一行保存到滚动缓冲区
-        top_row_cells = self.cells[self.scroll_top][:]
-        self._add_to_scrollback(top_row_cells)
+        if not self._alt_screen_active:
+            top_row_cells = self.cells[self.scroll_top][:]
+            self._add_to_scrollback(top_row_cells)
         
-        # 所有行上移一行 - 标记所有受影响的行
         for row in range(self.scroll_top, self.scroll_bottom):
             # 深拷贝下一行的Cell对象，避免多行引用相同的Cell
-            self.cells[row] = [Cell(cell.char, cell.fg_color, cell.bg_color, cell.bold, cell.underline) 
+            self.cells[row] = [Cell(cell.char, cell.fg_color, cell.bg_color, cell.bold, cell.underline, cell.reverse) 
                               for cell in self.cells[row + 1]]
             self.modified_rows.add(row)
             # 标记整行都修改了（因为内容完全来自下一行）
@@ -320,7 +380,7 @@ class VirtualScreen:
         
         # 滚动区域底部的新行清空
         for col in range(self.cols):
-            self.cells[self.scroll_bottom][col].reset()
+            self._reset_cell(self.scroll_bottom, col)
         self.modified_rows.add(self.scroll_bottom)
         self.modified_cols[self.scroll_bottom] = [0, self.cols - 1]
     
@@ -379,7 +439,11 @@ class VirtualScreen:
         Returns:
             该行的单元格列表，如果越界则返回None
         """
-        # 当在底部时（scrollback_position=0），直接显示屏幕内容
+        if self._alt_screen_active:
+            if 0 <= screen_row < self.rows:
+                return self.cells[screen_row]
+            return None
+        
         if self.scrollback_position == 0:
             if 0 <= screen_row < self.rows:
                 return self.cells[screen_row]
@@ -468,7 +532,7 @@ class VirtualScreen:
         
         self.rows = rows
         self.cols = cols
-        self.cells = [[Cell() for _ in range(cols)] for _ in range(rows)]
+        self.cells = [[Cell(fg_color=self.default_fg, bg_color=self.default_bg) for _ in range(cols)] for _ in range(rows)]
         
         # 复制旧数据
         for r in range(min(rows, old_rows)):

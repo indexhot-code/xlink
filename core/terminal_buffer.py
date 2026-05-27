@@ -11,12 +11,13 @@ from typing import List, Tuple, Optional
 
 @dataclass
 class TextSegment:
-    """文本片段"""
+    """文本段（带样式信息）"""
     text: str
-    fg_color: Optional[str] = None  # 前景色
-    bg_color: Optional[str] = None  # 背景色
+    fg_color: Optional[str] = None
+    bg_color: Optional[str] = None
     bold: bool = False
     underline: bool = False
+    reverse: bool = False
 
 
 @dataclass
@@ -32,6 +33,21 @@ class TerminalCommand:
 
 class ANSIParser:
     """ANSI转义序列解析器"""
+    
+    # DEC特殊图形字符映射 (用于 top/vim 等 TUI 程序的边框绘制)
+    DEC_GRAPHICS_MAP = {
+        'j': '┘', 'k': '┐', 'l': '┌', 'm': '└',
+        'n': '┼', 'q': '─', 't': '├', 'u': '┤',
+        'v': '┴', 'w': '┬', 'x': '│',
+        'a': '▒', 'b': '␉', 'c': '␌', 'd': '␍',
+        'e': '␊', 'f': '°', 'g': '±', 'h': '␤',
+        'i': '␋', 'o': '┐', 'p': '┘', 'r': '└',
+        's': '┌', 'y': '≤', 'z': '≥',
+        '0': '█', '1': '▀', '2': '▄', '3': '▌',
+        '4': '▐', '5': '░', '6': '▒', '7': '▓',
+        '8': '▔', '9': '▕',
+        '`': '◆', '~': '·',
+    }
     
     # ANSI颜色映射表
     ANSI_COLORS = {
@@ -116,6 +132,19 @@ class ANSIParser:
         # 例如: \033[?1034h (启用8位输入), \033[?1049h (备用屏幕)
         self.dec_private_pattern = re.compile(r'\033\[\?[0-9;]*[hl]')
         
+        # 备用屏幕切换序列
+        self.alt_screen_enable_pattern = re.compile(r'\033\[\?1049h')
+        self.alt_screen_disable_pattern = re.compile(r'\033\[\?1049l')
+        self.alt_screen_47_enable_pattern = re.compile(r'\033\[\?47h')
+        self.alt_screen_47_disable_pattern = re.compile(r'\033\[\?47l')
+        
+        # 光标键模式切换
+        self.cursor_key_app_pattern = re.compile(r'\033\[\?1h')
+        self.cursor_key_normal_pattern = re.compile(r'\033\[\?1l')
+        
+        # 滚动区域设置 \033[top;bottomr
+        self.scroll_region_pattern = re.compile(r'\033\[(\d*);(\d*)r')
+        
         # 匹配字符集选择序列 \033(<charset> 或 \033)<charset>
         # 例如: \033(B (ASCII字符集), \033(0 (图形字符集)
         # 这些序列在 top、vim 等命令中常见
@@ -133,6 +162,10 @@ class ANSIParser:
         
         # 当前样式状态
         self.reset_state()
+        
+        # 字符集状态 (G0/G1)
+        self._g0_charset = 'ascii'  # 'ascii' | 'graphics'
+        self._g1_charset = 'ascii'
         
         # 控制命令列表
         self.commands = []
@@ -162,8 +195,16 @@ class ANSIParser:
         self.current_bg = None
         self.current_bold = False
         self.current_underline = False
-        # 注意: 不在这里清空commands,否则会在处理颜色序列时丢失清屏命令
-        # self.commands = []  # 已移除
+        self.current_reverse = False
+    
+    def _apply_charset_mapping(self, text: str) -> str:
+        """应用字符集映射（将 DEC 图形字符转换为 Unicode）"""
+        if self._g0_charset != 'graphics':
+            return text
+        result = []
+        for ch in text:
+            result.append(self.DEC_GRAPHICS_MAP.get(ch, ch))
+        return ''.join(result)
     
     def parse(self, text: str) -> List[TextSegment]:
         """
@@ -278,6 +319,35 @@ class ANSIParser:
         if not clear_found:
             pass
         
+        # 检测备用屏幕切换序列
+        if self.alt_screen_enable_pattern.search(text):
+            self.commands.append(TerminalCommand('alt_screen_enable'))
+            text = self.alt_screen_enable_pattern.sub('', text)
+        if self.alt_screen_disable_pattern.search(text):
+            self.commands.append(TerminalCommand('alt_screen_disable'))
+            text = self.alt_screen_disable_pattern.sub('', text)
+        if self.alt_screen_47_enable_pattern.search(text):
+            self.commands.append(TerminalCommand('alt_screen_enable'))
+            text = self.alt_screen_47_enable_pattern.sub('', text)
+        if self.alt_screen_47_disable_pattern.search(text):
+            self.commands.append(TerminalCommand('alt_screen_disable'))
+            text = self.alt_screen_47_disable_pattern.sub('', text)
+        
+        # 检测光标键模式切换
+        if self.cursor_key_app_pattern.search(text):
+            self.commands.append(TerminalCommand('cursor_key_app'))
+            text = self.cursor_key_app_pattern.sub('', text)
+        if self.cursor_key_normal_pattern.search(text):
+            self.commands.append(TerminalCommand('cursor_key_normal'))
+            text = self.cursor_key_normal_pattern.sub('', text)
+        
+        # 检测滚动区域设置
+        for match in self.scroll_region_pattern.finditer(text):
+            top = int(match.group(1)) - 1 if match.group(1) else 0
+            bottom = int(match.group(2)) - 1 if match.group(2) else 999
+            self.commands.append(TerminalCommand('set_scroll_region', {'top': top, 'bottom': bottom}))
+        text = self.scroll_region_pattern.sub('', text)
+        
         # 移除所有控制序列(按优先级顺序)
         
         # 1. 移陰OSC序列(窗口标题等)
@@ -286,7 +356,18 @@ class ANSIParser:
         # 2. 移陰DEC私有序列
         text = self.dec_private_pattern.sub('', text)
         
-        # 2.5. 移除字符集选择序列 (\033(B 等)
+        # 2.5. 检测并处理字符集选择序列 (\033(B \033(0 等)
+        charset_matches = list(self.charset_pattern.finditer(text))
+        for match in charset_matches:
+            seq = match.group(0)
+            if seq == '\x1b(0':
+                self._g0_charset = 'graphics'
+            elif seq == '\x1b(B':
+                self._g0_charset = 'ascii'
+            elif seq == '\x1b)0':
+                self._g1_charset = 'graphics'
+            elif seq == '\x1b)B':
+                self._g1_charset = 'ascii'
         text = self.charset_pattern.sub('', text)
         
         # 3. 移除光标显示/隐藏
@@ -327,11 +408,12 @@ class ANSIParser:
                 # 先保存之前的文本
                 if current_text:
                     segments.append(TextSegment(
-                        text=current_text,
+                        text=self._apply_charset_mapping(current_text),
                         fg_color=self.current_fg,
                         bg_color=self.current_bg,
                         bold=self.current_bold,
-                        underline=self.current_underline
+                        underline=self.current_underline,
+                        reverse=self.current_reverse
                     ))
                     current_text = ""
                 
@@ -341,11 +423,12 @@ class ANSIParser:
         # 添加最后的文本
         if current_text:
             segments.append(TextSegment(
-                text=current_text,
+                text=self._apply_charset_mapping(current_text),
                 fg_color=self.current_fg,
                 bg_color=self.current_bg,
                 bold=self.current_bold,
-                underline=self.current_underline
+                underline=self.current_underline,
+                reverse=self.current_reverse
             ))
         
         return segments
@@ -377,6 +460,12 @@ class ANSIParser:
             elif param == 4:
                 # 下划线
                 self.current_underline = True
+            elif param == 7:
+                # 反向视频
+                self.current_reverse = True
+            elif param == 27:
+                # 取消反向视频
+                self.current_reverse = False
             elif param == 38 and i + 1 < len(params):
                 # 前景色扩展
                 if params[i + 1] == 5 and i + 2 < len(params):

@@ -212,6 +212,8 @@ class MainWindow(QMainWindow):
         theme = self.session_manager.get_theme()
         qss = ThemeManager.get_theme(theme)
         self.setStyleSheet(qss)
+        
+        self.tab_manager.set_theme(theme)
     
     def _set_theme(self, theme: str):
         """

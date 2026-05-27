@@ -978,6 +978,7 @@ class SftpFileManager(QFrame):
         
         # 使用异步上传
         self.sftp_manager.upload_file_async(file_path, remote_path)
+        self._invalidate_dir_cache(current_path)
     
     def download_file(self):
         """下载文件"""
@@ -1039,6 +1040,7 @@ class SftpFileManager(QFrame):
         
         # 使用异步创建
         self.sftp_manager.mkdir_async(new_path)
+        self._invalidate_dir_cache(current_path)
     
     def delete_selected(self):
         """删除选中的文件/文件夹"""
@@ -1069,6 +1071,7 @@ class SftpFileManager(QFrame):
             path = current_path + "/" + data['name']
             # 使用异步删除
             self.sftp_manager.delete_async(path, data['is_dir'])
+        self._invalidate_dir_cache(current_path)
     
     def _show_context_menu(self, pos):
         """显示文件列表右键菜单"""
@@ -1127,12 +1130,22 @@ class SftpFileManager(QFrame):
         
         new_path = parent_path.rstrip('/') + '/' + dir_name.strip()
         self.sftp_manager.mkdir_async(new_path)
+        self._invalidate_dir_cache(parent_path)
     
     def _copy_path(self, path):
         """复制路径到剪贴板"""
         from PySide6.QtGui import QClipboard
         clipboard = QApplication.clipboard()
         clipboard.setText(path)
+    
+    def _invalidate_dir_cache(self, path: str):
+        """使指定路径的目录树缓存失效"""
+        path = path.rstrip('/')
+        keys_to_remove = [k for k in self._dir_tree_cache if k == path or k.startswith(path + '/')]
+        for k in keys_to_remove:
+            del self._dir_tree_cache[k]
+        if keys_to_remove:
+            logger.debug(f"缓存失效: {keys_to_remove}")
     
     def _on_connected(self):
         """连接成功"""

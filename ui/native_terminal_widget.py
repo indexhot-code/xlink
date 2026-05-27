@@ -65,6 +65,9 @@ class NativeTerminalWidget(QWidget):
         self._refresh_count = 0
         self._last_refresh_time = 0
         
+        # 光标键模式 (DECCKM)
+        self._cursor_key_app_mode = False
+        
         # 滚动控制
         self._scroll_position = 0  # 滚动偏移(行)
         self._just_cleared_screen = False
@@ -87,6 +90,14 @@ class NativeTerminalWidget(QWidget):
         
         # 颜色配置标志
         self._color_config_sent = False
+        
+        # 终端配色 (默认深色主题)
+        self._terminal_colors = {
+            'background': '#1E1E1E',
+            'foreground': '#D4D4D4',
+            'cursor': '#FFFFFF',
+            'selection': '#264F78',
+        }
         
         # 清屏状态跟踪
         self._clear_screen_pending = False  # 清屏操作是否正在进行
@@ -192,6 +203,14 @@ class NativeTerminalWidget(QWidget):
         """错误处理"""
         self.error_occurred.emit(error)
     
+    def set_terminal_colors(self, colors: dict):
+        """设置终端配色方案"""
+        self._terminal_colors.update(colors)
+        self.screen.default_fg = self._terminal_colors['foreground']
+        self.screen.default_bg = self._terminal_colors['background']
+        self._needs_full_render = True
+        self.update()
+    
     def _on_ssh_data(self, data: str):
         """接收SSH数据"""
         logger.info(f"[SSH数据] 接收到 {len(data)} 字节数据, 前100字符: {repr(data[:100])}")
@@ -240,6 +259,21 @@ class NativeTerminalWidget(QWidget):
             elif cmd.command_type == 'cursor_back':
                 n = cmd.params.get('n', 1)
                 self.screen.move_cursor_back(n)
+            elif cmd.command_type == 'alt_screen_enable':
+                self.screen.enable_alt_screen()
+                self._needs_full_render = True
+            elif cmd.command_type == 'alt_screen_disable':
+                self.screen.disable_alt_screen()
+                self._needs_full_render = True
+            elif cmd.command_type == 'cursor_key_app':
+                self._cursor_key_app_mode = True
+            elif cmd.command_type == 'cursor_key_normal':
+                self._cursor_key_app_mode = False
+            elif cmd.command_type == 'set_scroll_region':
+                top = cmd.params.get('top', 0)
+                bottom = cmd.params.get('bottom', self.screen.rows - 1)
+                bottom = min(bottom, self.screen.rows - 1)
+                self.screen.set_scroll_region(top, bottom)
         
         # 写入文本数据
         for segment in segments:
@@ -256,10 +290,11 @@ class NativeTerminalWidget(QWidget):
                 
                 # 正常写入文本
                 self.screen.write_text(segment.text, {
-                    'fg': segment.fg_color or '#D4D4D4',
-                    'bg': segment.bg_color or '#1E1E1E',
+                    'fg': segment.fg_color or self._terminal_colors['foreground'],
+                    'bg': segment.bg_color or self._terminal_colors['background'],
                     'bold': segment.bold,
-                    'underline': segment.underline
+                    'underline': segment.underline,
+                    'reverse': segment.reverse
                 })
                 
                 # 记录写入后的屏幕状态
@@ -538,7 +573,7 @@ class NativeTerminalWidget(QWidget):
         
         # 1. 绘制背景（仅完整渲染或修改行数较多时）
         if is_full_render or len(rows_to_render) > visible_rows // 2:
-            painter.fillRect(self.rect(), QColor("#1E1E1E"))
+            painter.fillRect(self.rect(), QColor(self._terminal_colors['background']))
         
         # 2. 绘制虚拟屏幕内容（支持滚动缓冲区）
         painter.setFont(self.font)
@@ -560,10 +595,10 @@ class NativeTerminalWidget(QWidget):
                     min_col, max_col = col_range
                     x_start = min_col * self.char_width
                     width = (max_col - min_col + 1) * self.char_width
-                    painter.fillRect(x_start, y, width, self.char_height, QColor("#1E1E1E"))
+                    painter.fillRect(x_start, y, width, self.char_height, QColor(self._terminal_colors['background']))
                 else:
                     # 清除整行
-                    painter.fillRect(0, y, self.width(), self.char_height, QColor("#1E1E1E"))
+                    painter.fillRect(0, y, self.width(), self.char_height, QColor(self._terminal_colors['background']))
             
             # 确定要渲染的列范围
             if cols_to_render is not None:
@@ -579,14 +614,19 @@ class NativeTerminalWidget(QWidget):
                 cell = row_cells[col]
                 x = col * self.char_width
                 
+                fg = cell.fg_color
+                bg = cell.bg_color
+                if cell.reverse:
+                    fg, bg = bg, fg
+                
                 # 绘制背景色
-                if cell.bg_color != '#1E1E1E':
+                if bg != self._terminal_colors['background']:
                     painter.fillRect(x, y, self.char_width, self.char_height, 
-                                   QColor(cell.bg_color))
+                                   QColor(bg))
                 
                 # 绘制字符
                 if cell.char != ' ':
-                    painter.setPen(QColor(cell.fg_color))
+                    painter.setPen(QColor(fg))
                     if cell.bold:
                         font = QFont(self.font)
                         font.setBold(True)
@@ -674,18 +714,28 @@ class NativeTerminalWidget(QWidget):
         
         # 方向键 - 始终发送到服务器
         if key == Qt.Key.Key_Left:
-            self.ssh_connection.send_data('\x1b[D')
+            if self._cursor_key_app_mode:
+                self.ssh_connection.send_data('\x1bOD')
+            else:
+                self.ssh_connection.send_data('\x1b[D')
             return
         if key == Qt.Key.Key_Right:
-            self.ssh_connection.send_data('\x1b[C')
+            if self._cursor_key_app_mode:
+                self.ssh_connection.send_data('\x1bOC')
+            else:
+                self.ssh_connection.send_data('\x1b[C')
             return
         if key == Qt.Key.Key_Up:
-            # 发送上方向键序列到服务器，由服务器处理历史记录
-            self.ssh_connection.send_data('\x1b[A')
+            if self._cursor_key_app_mode:
+                self.ssh_connection.send_data('\x1bOA')
+            else:
+                self.ssh_connection.send_data('\x1b[A')
             return
         if key == Qt.Key.Key_Down:
-            # 发送下方向键序列到服务器，由服务器处理历史记录
-            self.ssh_connection.send_data('\x1b[B')
+            if self._cursor_key_app_mode:
+                self.ssh_connection.send_data('\x1bOB')
+            else:
+                self.ssh_connection.send_data('\x1b[B')
             return
         
         # Home/End键
@@ -827,19 +877,18 @@ class NativeTerminalWidget(QWidget):
     
     def _clear_current_line(self):
         """清空当前行内容"""
-        # 清除当前行的内容
         for col in range(self.screen.cols):
-            self.screen.cells[self.screen.cursor_row][col].reset()
+            self.screen._reset_cell(self.screen.cursor_row, col)
         self.screen.modified_rows.add(self.screen.cursor_row)
         self.screen.cursor_col = 0
-        self._render_timer.start(16)  # 触发重绘
+        self._render_timer.start(16)
     
     def _display_text_on_screen(self, text: str):
         """在屏幕上显示文本（不发送到服务器）"""
         # 将文本写入屏幕缓冲区
         attrs = {
-            'fg': '#D4D4D4',  # 默认前景色
-            'bg': '#1E1E1E',  # 默认背景色
+            'fg': self._terminal_colors['foreground'],
+            'bg': self._terminal_colors['background'],
             'bold': False,
             'underline': False
         }
