@@ -246,13 +246,15 @@ class SessionManager:
     
     # ==================== 批量导入导出功能 ====================
     
-    def export_sessions(self, file_path: str, format: str = 'json') -> bool:
+    def export_sessions(self, file_path: str, format: str = 'json', 
+                        include_password: bool = False) -> bool:
         """
         导出会话配置
         
         Args:
             file_path: 导出文件路径
             format: 导出格式 ('json' 或 'csv')
+            include_password: 是否包含密码(默认不包含, 防止明文泄露)
             
         Returns:
             是否成功
@@ -261,11 +263,19 @@ class SessionManager:
             sessions = self.get_sessions()
             
             if format == 'json':
-                # JSON格式: 保留完整信息
+                # JSON格式: 保留完整信息(密码默认脱敏)
+                import copy
+                export_data = copy.deepcopy(sessions)
+                if not include_password:
+                    for session in export_data:
+                        if session.get('password'):
+                            session['password'] = ''
+                            session['password_stripped'] = True  # 标记密码已被移除
+                
                 with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump(sessions, f, ensure_ascii=False, indent=2)
+                    json.dump(export_data, f, ensure_ascii=False, indent=2)
             elif format == 'csv':
-                # CSV格式: 简化信息
+                # CSV格式: 简化信息(不含密码)
                 import csv
                 with open(file_path, 'w', encoding='utf-8-sig', newline='') as f:
                     writer = csv.writer(f)
@@ -275,10 +285,10 @@ class SessionManager:
                     for session in sessions:
                         writer.writerow([
                             session.get('name', ''),
-                            session.get('hostname', ''),
+                            session.get('host', ''),
                             session.get('port', 22),
                             session.get('username', ''),
-                            session.get('auth_type', 'password'),
+                            session.get('auth_method', 'password'),
                             session.get('group', 'default')
                         ])
             else:
@@ -315,10 +325,10 @@ class SessionManager:
                         session = {
                             'id': str(uuid.uuid4()),
                             'name': row.get('名称', ''),
-                            'hostname': row.get('主机', ''),
+                            'host': row.get('主机', ''),
                             'port': int(row.get('端口', 22)),
                             'username': row.get('用户名', ''),
-                            'auth_type': row.get('认证方式', 'password'),
+                            'auth_method': row.get('认证方式', 'password'),
                             'group': row.get('分组', 'default')
                         }
                         imported_sessions.append(session)
@@ -327,6 +337,15 @@ class SessionManager:
             
             if not isinstance(imported_sessions, list):
                 return (0, 0, ["文件格式错误"])
+            
+            # 统一字段命名(兼容旧版导出: hostname->host, key_file->key_path, auth_type->auth_method)
+            for session in imported_sessions:
+                if 'hostname' in session and 'host' not in session:
+                    session['host'] = session.pop('hostname')
+                if 'key_file' in session and 'key_path' not in session:
+                    session['key_path'] = session.pop('key_file')
+                if 'auth_type' in session and 'auth_method' not in session:
+                    session['auth_method'] = session.pop('auth_type')
             
             # 处理导入
             current_sessions = self.get_sessions()

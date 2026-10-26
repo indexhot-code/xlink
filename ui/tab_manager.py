@@ -88,13 +88,18 @@ class TabManager(QTabWidget):
         # 设置终端的SSH连接
         terminal.set_ssh_connection(connection)
         
+        # 根据认证方式取参数(统一字段: host / key_path, 兼容旧字段 key_file)
+        auth_method = session_data.get("auth_method", "password")
+        password = session_data.get("password", "") if auth_method == "password" else ""
+        key_file = session_data.get("key_path") or session_data.get("key_file", "") if auth_method == "key" else ""
+
         # 发起连接
         connection.connect(
-            host=session_data.get("host", ""),
+            host=session_data.get("host", "") or session_data.get("hostname", ""),
             port=session_data.get("port", 22),
             username=session_data.get("username", ""),
-            password=session_data.get("password", ""),
-            key_file=session_data.get("key_file", ""),
+            password=password,
+            key_file=key_file,
             timeout=session_data.get("timeout", 30)
         )
         

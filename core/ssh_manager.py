@@ -19,7 +19,7 @@ import os
 import hashlib
 from typing import Optional, Dict, Any
 import asyncssh
-from PySide6.QtCore import QObject, Signal as pyqtSignal, QTimer
+from PySide6.QtCore import QObject, Signal as pyqtSignal
 from core.logger import get_logger
 
 
@@ -137,6 +137,55 @@ class MySSHSession(asyncssh.SSHClientSession):
         return self._chan
 
 
+class TOFUHostKeyClient(asyncssh.SSHClient):
+    """
+    TOFU主机密钥校验客户端
+
+    AsyncSSH在密钥交换阶段(认证凭据发送之前)回调 validate_host_public_key,
+    在此完成首次信任(TOFU)与密钥变更检测。
+
+    注意: asyncssh的known_hosts参数不支持协程回调(其返回值会被当作序列切片),
+    因此必须通过client_factory注入本类来实现自定义校验。
+    """
+    
+    def __init__(self, known_hosts_mgr: KnownHostsManager, host: str, port: int):
+        self._mgr = known_hosts_mgr
+        self._fallback_host = host
+        self._fallback_port = port
+        self.key_status = None  # 'new' / 'match' / 'mismatch'
+    
+    def validate_host_public_key(self, host, addr, port, key) -> bool:
+        """
+        返回True表示信任该主机密钥, False则AsyncSSH抛出HostKeyNotVerifiable
+        """
+        try:
+            host_key_str = key.export_public_key()
+        except Exception:
+            host_key_str = str(key)
+        if isinstance(host_key_str, bytes):
+            host_key_str = host_key_str.decode('ascii', 'replace')
+        
+        host = host or self._fallback_host
+        port = port or self._fallback_port
+        
+        status = self._mgr.check_host_key(host, port, host_key_str)
+        self.key_status = status
+        
+        if status == 'match':
+            logger.debug(f"主机密钥验证通过: {host}:{port}")
+            return True
+        
+        if status == 'new':
+            # TOFU: 首次连接自动信任并记录
+            self._mgr.add_host(host, port, host_key_str)
+            logger.info(f"TOFU: 首次连接 {host}:{port}, 已在握手阶段保存主机密钥")
+            return True
+        
+        # mismatch
+        logger.error(f"主机密钥验证失败: {host}:{port}, 可能存在中间人攻击!")
+        return False
+
+
 class SSHConnection(QObject):
     """
     基于AsyncSSH的SSH连接管理类
@@ -170,6 +219,7 @@ class SSHConnection(QObject):
         # AsyncSSH核心对象
         self.conn: Optional[asyncssh.SSHClientConnection] = None
         self.process: Optional[asyncssh.SSHClientProcess] = None
+        self.chan = None  # shell通道对象
         
         # 连接状态
         self._state = self.STATE_DISCONNECTED
@@ -179,10 +229,8 @@ class SSHConnection(QObject):
         self.session_info: Dict[str, Any] = {}
         self._connect_params: Dict[str, Any] = {}
         
-        # 心跳配置
+        # 心跳配置(asyncssh原生keepalive, 连接时下发)
         self.heartbeat_interval = 30  # 秒
-        self._last_activity_time = 0
-        self._heartbeat_task: Optional[asyncio.Task] = None
         
         # 重连配置
         self.auto_reconnect = True
@@ -289,7 +337,15 @@ class SSHConnection(QObject):
                 'port': port,
                 'username': username,
                 'connect_timeout': timeout,
-                'known_hosts': None,  # 先接受任意密钥，连接后再做 TOFU 验证
+                # 空信任集: 强制所有主机密钥走 validate_host_public_key 自定义校验
+                # (不能传None, 传None会完全关闭主机密钥校验)
+                'known_hosts': [[], [], []],
+                'client_factory': lambda: TOFUHostKeyClient(
+                    self._known_hosts_mgr, host, port
+                ),
+                # 原生keepalive: 每30s发一次, 连续3次无响应则判定断线
+                'keepalive_interval': self.heartbeat_interval,
+                'keepalive_count_max': 3,
             }
             
             # 认证方式
@@ -303,32 +359,8 @@ class SSHConnection(QObject):
                 connect_kwargs['password'] = password
                 logger.debug("使用密码认证")
             
-            # 建立连接
+            # 建立连接(主机密钥已在密钥交换阶段由TOFUHostKeyClient校验)
             self.conn = await asyncssh.connect(**connect_kwargs)
-            
-            # TOFU 主机密钥验证（连接建立后进行）
-            host_key = self.conn.get_server_host_key()
-            host_key_str = host_key.export_public_key()
-            if isinstance(host_key_str, bytes):
-                host_key_str = host_key_str.decode('ascii')
-            
-            key_status = self._known_hosts_mgr.check_host_key(host, port, host_key_str)
-            
-            if key_status == 'new':
-                self._known_hosts_mgr.add_host(host, port, host_key_str)
-                logger.info(f"TOFU: 首次连接 {host}:{port}, 已保存主机密钥")
-            elif key_status == 'mismatch':
-                self.conn.close()
-                try:
-                    await self.conn.wait_closed()
-                except Exception:
-                    pass
-                error_msg = f"主机密钥验证失败: {host}:{port}\n密钥不匹配，可能存在中间人攻击!"
-                logger.error(error_msg)
-                self._set_state(self.STATE_DISCONNECTED)
-                self.error_occurred.emit(error_msg)
-                self.connection_status.emit("error")
-                return
             
             # 打开交互式shell
             self.chan, self.process = await self.conn.create_session(
@@ -348,49 +380,84 @@ class SSHConnection(QObject):
             self._set_state(self.STATE_CONNECTED)
             self._reconnect_attempts = 0
             self._running = True
-            
-            self._last_activity_time = time.time()
-            
+
             logger.info(f"SSH连接成功: {host}:{port}")
-            
+
             # 发送连接成功信号
             self.connection_status.emit(self.STATE_CONNECTED)
-            
-            # 启动后台任务
-            self._start_read_task()
-            self._start_heartbeat_task()
             
         except asyncssh.PermissionDenied as e:
             error_msg = "认证失败: 用户名、密码或私钥错误"
             logger.error(error_msg)
             self._set_state(self.STATE_DISCONNECTED)
             self.error_occurred.emit(error_msg)
+            # 认证失败重试无意义, 不进入重连流程
             self.connection_status.emit("error")
-        
+
         except asyncssh.HostKeyNotVerifiable as e:
             error_msg = f"主机密钥验证失败: {host}:{port} 密钥不匹配，可能存在中间人攻击!"
             logger.error(error_msg)
             self._set_state(self.STATE_DISCONNECTED)
             self.error_occurred.emit(error_msg)
+            # 疑似中间人攻击, 不自动重连
             self.connection_status.emit("error")
-            
-        except asyncssh.DisconnectError as e:
-            error_msg = f"SSH连接断开: {str(e)}"
+
+        except (asyncssh.DisconnectError, OSError) as e:
+            error_msg = f"连接失败: {str(e)}"
             logger.error(error_msg)
             self._set_state(self.STATE_DISCONNECTED)
             self.error_occurred.emit(error_msg)
-            self.connection_status.emit("error")
-            
+            self._maybe_retry_connect()
+
         except Exception as e:
             error_msg = f"连接失败: {str(e)}"
             logger.error(error_msg, exc_info=True)
             self._set_state(self.STATE_DISCONNECTED)
             self.error_occurred.emit(error_msg)
+            self._maybe_retry_connect()
+
+    def _maybe_retry_connect(self):
+        """
+        连接失败后按需调度下一次重连
+
+        仅在自动重连流程中(已有重连尝试记录)才继续退避重试;
+        首次连接失败只报错, 不自动重试。
+        """
+        if (self._running and self.auto_reconnect
+                and 0 < self._reconnect_attempts < self.max_reconnect_attempts):
+            asyncio.ensure_future(self._trigger_reconnect())
+        else:
             self.connection_status.emit("error")
     
-    def _start_read_task(self):
-        """启动数据读取任务 - 实际上不需要，因为数据会通过SSHSession回调传递"""
-        logger.debug("使用SSHSession机制，无需额外的数据读取任务")
+    def _on_connection_lost(self, exc=None):
+        """
+        连接丢失回调(唯一实现)
+
+        用户主动断开(disconnect已置_running=False)或禁用重连时不重连;
+        否则按指数退避调度下一次重连。
+        """
+        # 用户主动断开(disconnect已置_running=False)或禁用重连时不重连;
+        was_disconnecting = (self._state == self.STATE_DISCONNECTING) or not self._running
+        logger.warning(f"SSH连接丢失: {exc}")
+        self._set_state(self.STATE_DISCONNECTED)
+
+        if was_disconnecting:
+            # 主动断开: 状态信号由disconnect()统一发出, 此处不重复
+            return
+
+        if not self.auto_reconnect:
+            self.connection_status.emit(self.STATE_DISCONNECTED)
+            return
+
+        if self._reconnect_attempts >= self.max_reconnect_attempts:
+            logger.error(f"重连次数超限({self.max_reconnect_attempts}), 停止重连")
+            self._running = False
+            self.error_occurred.emit("重连失败: 超过最大重连次数")
+            self.connection_status.emit("error")
+            return
+
+        self._reconnect_attempts += 1
+        asyncio.ensure_future(self._trigger_reconnect())
 
     def _on_data_received(self, data: str):
         """
@@ -401,126 +468,8 @@ class SSHConnection(QObject):
         """
         logger.info(f"[SSH回调] 接收到 {len(data)} 字节数据, 前100字符: {repr(data[:100])}")
         
-        # 更新活动时间
-        self._last_activity_time = time.time()
-        
         # 发送数据信号
         self.data_received.emit(data)
-    
-    def _on_connection_lost(self, exc=None):
-        """
-        连接丢失回调
-        
-        Args:
-            exc: 异常对象（可选）
-        """
-        logger.info(f"SSH连接丢失: {exc}")
-        self._set_state(self.STATE_DISCONNECTED)
-        
-        # 检查是否应该重连
-        if (self.auto_reconnect and 
-            self._reconnect_attempts < self.max_reconnect_attempts and
-            self._running):
-            
-            self._reconnect_attempts += 1
-            self._set_state(self.STATE_RECONNECTING)
-            self.reconnecting.emit(self._reconnect_attempts)
-            
-            # 计算重连延迟（指数退避）
-            delay = min(self.reconnect_delay * (2 ** (self._reconnect_attempts - 1)), 
-                       self.max_reconnect_delay)
-            
-            logger.info(f"准备进行第 {self._reconnect_attempts} 次重连，延迟 {delay} 秒")
-            
-            # 延迟后重连
-            timer = QTimer()
-            timer.setSingleShot(True)
-            timer.timeout.connect(lambda: self._attempt_reconnect())
-            timer.start(int(delay * 1000))
-        else:
-            # 重连失败或禁用重连
-            self.connection_status.emit(self.STATE_DISCONNECTED)
-            self._running = False
-    
-    def _attempt_reconnect(self):
-        """尝试重连"""
-        if not self._running:
-            return
-            
-        params = self._connect_params
-        logger.info(f"正在进行第 {self._reconnect_attempts} 次重连: {params['host']}:{params['port']}")
-        
-        # 重新连接
-        self._run_coroutine(self._do_connect(
-            params['host'], 
-            params['port'], 
-            params['username'], 
-            params['password'], 
-            params['key_file'], 
-            params['timeout']
-        ))
-    
-    async def _read_output_loop(self):
-        """
-        数据读取主循环(异步) - 已废弃，使用SSHSession回调
-        """
-        logger.warning("此方法已废弃，请使用SSHSession回调")
-    
-    def _start_heartbeat_task(self):
-        """启动心跳检测任务"""
-        self._heartbeat_task = asyncio.ensure_future(self._heartbeat_loop())
-        logger.debug("心跳检测任务已启动")
-    
-    async def _heartbeat_loop(self):
-        """
-        心跳检测循环(异步)
-        
-        功能:
-        - 定期发送心跳包
-        - 检测连接活跃度
-        - 触发自动重连
-        """
-        logger.debug("心跳检测循环开始")
-        
-        try:
-            while self._running and self.is_connected:
-                await asyncio.sleep(self.heartbeat_interval)
-                
-                if not self._running or not self.is_connected:
-                    break
-                
-                current_time = time.time()
-                time_since_activity = current_time - self._last_activity_time
-                
-                # 检查是否超时
-                if time_since_activity > self.heartbeat_interval * 3:
-                    logger.warning(f"连接超时({time_since_activity:.1f}秒无活动)")
-                    
-                    if self.auto_reconnect:
-                        self._trigger_reconnect()
-                    else:
-                        self._on_connection_lost()
-                    break
-                
-                # 发送心跳 - AsyncSSH使用keepalive_request
-                if self.conn:
-                    try:
-                        # 使用keepalive机制
-                        self.conn.keepalive_interval = self.heartbeat_interval
-                        self._last_heartbeat_time = current_time
-                        logger.debug("心跳检查完成")
-                    except Exception as e:
-                        logger.warning(f"心跳检查失败: {e}")
-                        if self.auto_reconnect:
-                            await self._trigger_reconnect()
-                        break
-                        
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"心跳循环异常: {e}", exc_info=True)
-        
-        logger.debug("心跳检测循环结束")
     
     def send_data(self, data: str):
         """
@@ -536,7 +485,6 @@ class SSHConnection(QObject):
         try:
             # 直接发送数据
             self.chan.write(data)
-            self._last_activity_time = time.time()
         except Exception as e:
             logger.error(f"发送数据失败: {e}")
             self.error_occurred.emit(f"发送数据失败: {str(e)}")
@@ -550,14 +498,6 @@ class SSHConnection(QObject):
         self._set_state(self.STATE_DISCONNECTING)
         self._running = False
         self.auto_reconnect = False  # 禁用自动重连
-        
-        # 取消异步任务
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-            try:
-                await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
         
         # 关闭连接
         await self._close_connection()
@@ -588,30 +528,19 @@ class SSHConnection(QObject):
             finally:
                 self.conn = None
     
-    def _on_connection_lost(self, exc=None):
-        """连接丢失时的处理"""
-        if not self._running:
-            return
-        
-        logger.warning(f"连接已丢失: {exc}")
-        self._set_state(self.STATE_DISCONNECTED)
-        self._running = False
-        
-        # 触发自动重连
-        if self.auto_reconnect:
-            asyncio.ensure_future(self._trigger_reconnect())
-        else:
-            self.connection_status.emit(self.STATE_DISCONNECTED)
-    
     async def _trigger_reconnect(self):
-        """触发重连(指数退避) - 异步版本"""
+        """
+        触发重连(指数退避) - 异步版本
+
+        注意: _reconnect_attempts 已由 _on_connection_lost/_maybe_retry_connect
+        递增, 这里只负责延时和重连。
+        """
         if not self._running:
             return
-        
-        self._reconnect_attempts += 1
         
         if self._reconnect_attempts > self.max_reconnect_attempts:
             logger.error(f"重连次数超限({self.max_reconnect_attempts}),停止重连")
+            self._running = False
             self.error_occurred.emit("重连失败: 超过最大重连次数")
             self.connection_status.emit("error")
             return
@@ -629,7 +558,7 @@ class SSHConnection(QObject):
         # 在延迟后重连
         await asyncio.sleep(delay)
         
-        if not self.auto_reconnect:
+        if not self.auto_reconnect or not self._running:
             return
         
         logger.info("开始重连...")
