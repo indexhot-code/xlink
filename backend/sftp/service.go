@@ -163,15 +163,38 @@ func (s *Service) sftpClient(sessionID string) (*sftp.Client, func(), error) {
 }
 
 // openSide 返回任务两端打开器（上传：local→remote；下载：remote→local）。
-func (s *Service) openSide(j *job) (src sideOpener, dst sideOpener) {
+// 源端只读（绝不截断/修改源文件）；目标端 offset==0 时截断新建。
+func (s *Service) openSide(j *job) (src srcOpener, dst dstOpener) {
 	if j.dir == Upload {
-		return s.openLocal(j), s.openRemote(j)
+		return s.openLocalRead(j), s.openRemoteWrite(j)
 	}
-	return s.openRemote(j), s.openLocal(j)
+	return s.openRemoteRead(j), s.openLocalWrite(j)
 }
 
-// openLocal 本地端：offset>0 定位续传，否则截断新建。
-func (s *Service) openLocal(j *job) sideOpener {
+// openLocalRead 源端只读。
+func (s *Service) openLocalRead(j *job) srcOpener {
+	return func(offset int64) (io.ReadSeeker, int64, int64, error) {
+		f, err := os.Open(j.localPath)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		fi, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return nil, 0, 0, err
+		}
+		if offset > 0 {
+			if _, err := f.Seek(offset, io.SeekStart); err != nil {
+				f.Close()
+				return nil, 0, 0, err
+			}
+		}
+		return f, fi.Size(), fi.ModTime().UnixNano(), nil
+	}
+}
+
+// openLocalWrite 目标端：offset>0 定位续传，否则截断新建。
+func (s *Service) openLocalWrite(j *job) dstOpener {
 	return func(offset int64) (io.ReadWriteSeeker, int64, int64, error) {
 		flags := os.O_RDWR | os.O_CREATE
 		if offset == 0 {
@@ -200,8 +223,37 @@ func (s *Service) openLocal(j *job) sideOpener {
 	}
 }
 
-// openRemote 远端：同 openLocal 语义；文件关闭时一并关闭子连接。
-func (s *Service) openRemote(j *job) sideOpener {
+// openRemoteRead 源端只读（文件关闭时一并关闭子连接）。
+func (s *Service) openRemoteRead(j *job) srcOpener {
+	return func(offset int64) (io.ReadSeeker, int64, int64, error) {
+		sc, closeFn, err := s.sftpClient(j.sessionID)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		f, err := sc.Open(j.remotePath)
+		if err != nil {
+			closeFn()
+			return nil, 0, 0, err
+		}
+		fi, err := f.Stat()
+		if err != nil {
+			f.Close()
+			closeFn()
+			return nil, 0, 0, err
+		}
+		if offset > 0 {
+			if _, err := f.Seek(offset, io.SeekStart); err != nil {
+				f.Close()
+				closeFn()
+				return nil, 0, 0, err
+			}
+		}
+		return &remoteFile{File: f, closeFn: closeFn}, fi.Size(), fi.ModTime().UnixNano(), nil
+	}
+}
+
+// openRemoteWrite 目标端：同 openLocalWrite 语义。
+func (s *Service) openRemoteWrite(j *job) dstOpener {
 	return func(offset int64) (io.ReadWriteSeeker, int64, int64, error) {
 		sc, closeFn, err := s.sftpClient(j.sessionID)
 		if err != nil {

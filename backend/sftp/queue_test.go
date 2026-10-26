@@ -22,8 +22,8 @@ func TestQueuePersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	openSide := func(j *job) (sideOpener, sideOpener) {
-		return fs.opener(j.localPath), fs.opener(j.remotePath)
+	openSide := func(j *job) (srcOpener, dstOpener) {
+		return wrapSrc(fs.opener(j.localPath)), fs.opener(j.remotePath)
 	}
 	e1 := newEngine(db, defaultTestSettings(), openSide)
 	j := newTestJob(0, "/src", "/dst", 10)

@@ -38,6 +38,9 @@ type chunkSink interface {
 	io.Closer
 }
 
-// sideOpener 打开一端：offset>0 时定位到偏移续传，否则截断新建。
+// srcOpener 打开源端（只读，绝不修改源文件）：返回可 Seek 读流，Close 可选。
+type srcOpener func(offset int64) (io.ReadSeeker, int64, int64, error)
+
+// dstOpener 打开目标端：offset>0 定位续传，否则截断新建。
 // 返回 (读写端, 文件大小, 源mtime unix nanos, 错误)。
-type sideOpener func(offset int64) (io.ReadWriteSeeker, int64, int64, error)
+type dstOpener func(offset int64) (io.ReadWriteSeeker, int64, int64, error)

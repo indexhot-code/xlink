@@ -42,10 +42,10 @@ type engine struct {
 	settings Settings
 
 	// openSide 返回任务的源/目标打开器（上传：local→remote）。
-	openSide func(j *job) (src sideOpener, dst sideOpener)
+	openSide func(j *job) (src srcOpener, dst dstOpener)
 }
 
-func newEngine(db *store.Store, settings Settings, openSide func(*job) (sideOpener, sideOpener)) *engine {
+func newEngine(db *store.Store, settings Settings, openSide func(*job) (srcOpener, dstOpener)) *engine {
 	return &engine{db: db, jobs: make(map[int64]*job), settings: settings, openSide: openSide}
 }
 

@@ -1,4 +1,4 @@
-﻿// 多标签状态机 + 重启恢复。
+// 多标签状态机 + 重启恢复。
 // 持久化仅存 hostId（架构要求）：快照变更防抖写回；
 // 内存态 sessionId 绝不落盘，重启后按 hostId 重建会话。
 import { useSyncExternalStore } from "react";
@@ -77,6 +77,7 @@ export async function connectTab(key: string): Promise<void> {
       port: tab.host.port,
       user: tab.host.user,
       auth: tab.host.auth,
+      hostId: Number(tab.host.id) || 0,
       credentialId: Number(tab.host.credentialId) || 0,
       keyPath: tab.host.keyPath || "",
     } as never);
@@ -97,6 +98,24 @@ export function closeTab(key: string): void {
     activeKey = tabs[Math.min(idx, tabs.length - 1)]?.key || null;
   }
   emit();
+}
+
+/** 克隆标签：同一主机开新标签并建立新 SSH 会话。 */
+export async function cloneTab(key: string): Promise<void> {
+  const tab = tabs.find((t) => t.key === key);
+  if (!tab) return;
+  const nt: Tab = { key: nextKey(), host: tab.host, status: "connecting", session: null, error: null };
+  tabs = [...tabs, nt];
+  activeKey = nt.key;
+  emit();
+  await connectTab(nt.key);
+}
+
+/** 克隆主机连接：已有标签则克隆之，否则新建连接。 */
+export async function cloneHost(host: Host): Promise<void> {
+  const existing = tabs.find((t) => Number(t.host.id) === Number(host.id));
+  if (existing) return cloneTab(existing.key);
+  return openHost(host);
 }
 
 export function activateTab(key: string): void {

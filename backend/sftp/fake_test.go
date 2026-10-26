@@ -1,4 +1,4 @@
-﻿package sftp
+package sftp
 
 import (
 	"context"
@@ -73,7 +73,7 @@ func (m *memFS) get(path string) []byte {
 	return append([]byte(nil), f.data...)
 }
 
-func (m *memFS) opener(path string) sideOpener {
+func (m *memFS) opener(path string) func(int64) (io.ReadWriteSeeker, int64, int64, error) {
 	return func(offset int64) (io.ReadWriteSeeker, int64, int64, error) {
 		m.mu.Lock()
 		f, ok := m.files[path]
@@ -98,6 +98,13 @@ func (m *memFS) opener(path string) sideOpener {
 	}
 }
 
+// wrapSrc 把读写打开器适配为源端只读打开器（测试 fake 两端通用）。
+func wrapSrc(o func(int64) (io.ReadWriteSeeker, int64, int64, error)) srcOpener {
+	return func(offset int64) (io.ReadSeeker, int64, int64, error) {
+		r, size, mtime, err := o(offset)
+		return r, size, mtime, err
+	}
+}
 func testEngine(t *testing.T, set Settings, fs *memFS) *engine {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "t.db")
@@ -109,8 +116,8 @@ func testEngine(t *testing.T, set Settings, fs *memFS) *engine {
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return newEngine(db, set, func(j *job) (sideOpener, sideOpener) {
-		return fs.opener(j.localPath), fs.opener(j.remotePath)
+	return newEngine(db, set, func(j *job) (srcOpener, dstOpener) {
+		return wrapSrc(fs.opener(j.localPath)), fs.opener(j.remotePath)
 	})
 }
 
