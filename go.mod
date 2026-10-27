@@ -3,11 +3,11 @@ module xlink
 go 1.26.0
 
 require (
-	github.com/coder/websocket v1.8.14
+	github.com/coder/websocket v1.8.15
 	github.com/pkg/sftp v1.13.12
 	github.com/wailsapp/wails/v3 v3.0.0-beta.34
 	github.com/xanzy/ssh-agent v0.3.3
-	golang.org/x/crypto v0.57.0
+	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.61.0
 )

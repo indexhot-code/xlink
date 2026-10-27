@@ -408,6 +408,7 @@ func defaultSettings() Settings {
 type Service struct {
 	term *terminal.Service
 	db   *store.Store
+	lastDirs LastDirs
 
 	set Settings
 	eng *engine
@@ -422,6 +423,11 @@ func (s *Service) ServiceName() string { return "SFTPTransferService" }
 func (s *Service) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
 	if err := s.loadSettings(); err != nil {
 		return fmt.Errorf("load sftp settings: %w", err)
+	}
+	// 加载上次所在目录
+	var rawld string
+	if err := s.db.QueryRow(`SELECT value FROM settings WHERE key=?`, lastDirsKey).Scan(&rawld); err == nil {
+		_ = json.Unmarshal([]byte(rawld), &s.lastDirs)
 	}
 	s.eng = newEngine(s.db, s.set, s.openSide)
 	if err := s.eng.loadQueue(); err != nil {

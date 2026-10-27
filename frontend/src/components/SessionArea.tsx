@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { useTabs, connectTab } from "../stores/tabs";
 import { toggleSftp, useSftp } from "../stores/sftp";
 import TerminalView from "./TerminalView";
@@ -42,6 +42,8 @@ export default function SessionArea() {
               )
             ) : t.status === "connecting" ? (
               <div className="pane-status">连接中…</div>
+            ) : t.status === "disconnected" ? (
+              <div className="pane-status">保险库已锁定，解锁后自动恢复</div>
             ) : (
               <div className="pane-status">
                 <p>{t.error || "未连接"}</p>

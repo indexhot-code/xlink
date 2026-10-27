@@ -1,4 +1,4 @@
-﻿import { useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import * as VaultService from "../../bindings/xlink/backend/vault/service.js";
 
 /**
@@ -27,6 +27,11 @@ function subscribe(l: () => void) {
 
 export function useVault(): VaultStatus {
   return useSyncExternalStore(subscribe, () => status);
+}
+
+/** 模块级读取（供 tabs store 的连接守卫使用）。 */
+export function isUnlocked(): boolean {
+  return status.unlocked;
 }
 
 export async function refreshVaultStatus(): Promise<void> {

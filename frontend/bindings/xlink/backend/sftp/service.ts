@@ -25,6 +25,10 @@ export function Enqueue(dir: $models.Direction, sessionID: string, localPath: st
     return $Call.ByID(519772417, dir, sessionID, localPath, remotePath);
 }
 
+export function GetLastDirs(): $CancellablePromise<$models.LastDirs> {
+    return $Call.ByID(2300837235);
+}
+
 export function GetSettings(): $CancellablePromise<$models.Settings> {
     return $Call.ByID(2869345822);
 }
@@ -56,6 +60,34 @@ export function ListTransfers(): $CancellablePromise<$models.Transfer[] | null> 
 }
 
 /**
+ * LocalDelete 递归删除本地文件/目录。
+ */
+export function LocalDelete(path: string): $CancellablePromise<void> {
+    return $Call.ByID(1314359711, path);
+}
+
+/**
+ * LocalMkdir 在 parent 下新建目录，返回完整路径。
+ */
+export function LocalMkdir(parent: string, name: string): $CancellablePromise<string> {
+    return $Call.ByID(108616775, parent, name);
+}
+
+/**
+ * LocalRename 重命名（仅改名字，不移动目录）。
+ */
+export function LocalRename(oldPath: string, newName: string): $CancellablePromise<void> {
+    return $Call.ByID(3763806902, oldPath, newName);
+}
+
+/**
+ * LocalReveal 在资源管理器中显示该文件/目录。
+ */
+export function LocalReveal(path: string): $CancellablePromise<void> {
+    return $Call.ByID(3462634201, path);
+}
+
+/**
  * OnSessionClosed 标记某会话的运行中任务为 error（连接断开时由终端侧调用）。
  */
 export function OnSessionClosed(sessionID: string): $CancellablePromise<void> {
@@ -66,6 +98,55 @@ export function Pause(id: number): $CancellablePromise<void> {
     return $Call.ByID(1708196817, id);
 }
 
+/**
+ * PickDownloadFolder 原生对话框选择本地目标文件夹（下载到…）。
+ */
+export function PickDownloadFolder(): $CancellablePromise<string> {
+    return $Call.ByID(486538424);
+}
+
+/**
+ * PickUploadFiles 原生对话框多选文件（上传文件…）。
+ */
+export function PickUploadFiles(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(152312048);
+}
+
+/**
+ * PickUploadFolder 原生对话框选择文件夹（上传文件夹…）。
+ */
+export function PickUploadFolder(): $CancellablePromise<string> {
+    return $Call.ByID(3146600637);
+}
+
+/**
+ * RemoteDelete 递归删除远端文件/目录（拒绝删除根目录）。
+ */
+export function RemoteDelete(sessionID: string, path: string): $CancellablePromise<void> {
+    return $Call.ByID(2731052228, sessionID, path);
+}
+
+/**
+ * RemoteHome 返回远端主目录（SFTP 登录默认工作目录，等价 Linux ~）。
+ */
+export function RemoteHome(sessionID: string): $CancellablePromise<string> {
+    return $Call.ByID(2950741244, sessionID);
+}
+
+/**
+ * RemoteMkdir 远端新建目录，返回完整路径。
+ */
+export function RemoteMkdir(sessionID: string, parent: string, name: string): $CancellablePromise<string> {
+    return $Call.ByID(1331841886, sessionID, parent, name);
+}
+
+/**
+ * RemoteRename 远端重命名。
+ */
+export function RemoteRename(sessionID: string, oldPath: string, newName: string): $CancellablePromise<void> {
+    return $Call.ByID(1731820717, sessionID, oldPath, newName);
+}
+
 export function Resume(id: number): $CancellablePromise<void> {
     return $Call.ByID(3250995094, id);
 }
@@ -74,6 +155,18 @@ export function Retry(id: number): $CancellablePromise<void> {
     return $Call.ByID(3877009325, id);
 }
 
+export function SaveLastDirs($in: $models.LastDirs): $CancellablePromise<void> {
+    return $Call.ByID(696526440, $in);
+}
+
 export function SaveSettings($in: $models.Settings): $CancellablePromise<void> {
     return $Call.ByID(4210299961, $in);
+}
+
+/**
+ * UserDirs 返回本地高频目录（Windows 经 Known Folders 查询真实路径，
+ * 兼容桌面重定向/OneDrive 接管；资源管理器看到的桌面在哪，这里就是哪）。
+ */
+export function UserDirs(): $CancellablePromise<$models.UserDirs> {
+    return $Call.ByID(3166358338);
 }

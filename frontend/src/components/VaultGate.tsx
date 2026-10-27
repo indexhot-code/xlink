@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   useVault,
   refreshVaultStatus,
@@ -6,6 +6,7 @@ import {
   unlockVault,
   lockVault,
 } from "../stores/vault";
+import { lockTabs, reconnectAfterUnlock } from "../stores/tabs";
 
 /**
  * VaultGate：首次启动设置主口令 / 解锁对话框。
@@ -24,6 +25,11 @@ export default function VaultGate({ children }: { children: React.ReactNode }) {
     refreshVaultStatus();
   }, []);
 
+  // 解锁后自动恢复锁定前连接着的标签
+  useEffect(() => {
+    if (vault.loaded && vault.unlocked) reconnectAfterUnlock();
+  }, [vault.loaded, vault.unlocked]);
+
   if (!vault.loaded) {
     return (
       <main className="container">
@@ -37,7 +43,7 @@ export default function VaultGate({ children }: { children: React.ReactNode }) {
     return (
       <>
         {children}
-        <button className="lock-btn" title="锁定保险库" onClick={() => lockVault()}>
+        <button className="lock-btn" title="锁定保险库" onClick={() => lockVault().then(() => lockTabs())}>
           锁定
         </button>
       </>

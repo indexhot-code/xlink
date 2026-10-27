@@ -14,6 +14,14 @@ export enum Direction {
     Download = 2,
 };
 
+/**
+ * LastDirs 两端最后所在目录（重启恢复，对齐资源管理器停在上次位置的惯例）。
+ */
+export interface LastDirs {
+    "local": string;
+    "remote": string;
+}
+
 export interface LocalEntry {
     "name": string;
     "isDir": boolean;
@@ -83,3 +91,12 @@ export enum TransferState {
     StateError = "error",
     StateCanceled = "canceled",
 };
+
+/**
+ * UserDirs 本地高频目录。
+ */
+export interface UserDirs {
+    "desktop": string;
+    "downloads": string;
+    "documents": string;
+}

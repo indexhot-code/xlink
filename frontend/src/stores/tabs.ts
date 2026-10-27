@@ -6,8 +6,9 @@ import * as TerminalService from "../../bindings/xlink/backend/terminal/service.
 import * as LayoutService from "../../bindings/xlink/backend/layout/service.js";
 import type { Host } from "../../bindings/xlink/backend/connection/models.js";
 import type { PtySessionInfo } from "../lib/ws";
+import { isUnlocked } from "./vault";
 
-export type TabStatus = "connecting" | "connected" | "error";
+export type TabStatus = "connecting" | "connected" | "error" | "disconnected";
 
 export interface Tab {
   key: string; // 内存态唯一键（不落盘）
@@ -70,6 +71,13 @@ export async function openHost(host: Host): Promise<void> {
 export async function connectTab(key: string): Promise<void> {
   const tab = tabs.find((t) => t.key === key);
   if (!tab) return;
+  if (!isUnlocked()) {
+    // 保险库锁定期间不允许建会话（多为终端掉线自动重连触发）：
+    // 标记为因锁定断开，解锁后自动恢复。
+    if (tab.status !== "disconnected" && !lockedKeys.includes(key)) lockedKeys.push(key);
+    update(key, { status: "disconnected", session: null, error: null });
+    return;
+  }
   update(key, { status: "connecting", error: null });
   try {
     const session = await TerminalService.CreateSession({
@@ -84,6 +92,29 @@ export async function connectTab(key: string): Promise<void> {
     update(key, { status: "connected", session });
   } catch (e) {
     update(key, { status: "error", error: String(e) });
+  }
+}
+
+let lockedKeys: string[] = [];
+
+/** 锁定保险库：记住此前连接着的标签并置为因锁定断开。 */
+export function lockTabs(): void {
+  lockedKeys = tabs
+    .filter((t) => t.status === "connected" || t.status === "connecting")
+    .map((t) => t.key);
+  tabs = tabs.map((t) =>
+    lockedKeys.includes(t.key) ? { ...t, status: "disconnected" as const, session: null, error: null } : t,
+  );
+  emit();
+}
+
+/** 解锁后自动恢复锁定前连接着的标签。 */
+export async function reconnectAfterUnlock(): Promise<void> {
+  if (!lockedKeys.length) return;
+  const keys = [...lockedKeys];
+  lockedKeys = [];
+  for (const k of keys) {
+    if (tabs.some((t) => t.key === k)) await connectTab(k);
   }
 }
 
@@ -131,6 +162,7 @@ function update(key: string, patch: Partial<Tab>) {
 /** 重启恢复：读快照重建标签。可自动重连（keyfile/agent 或带凭据且保险库已解锁）
  * 直接连接；其余保持手动重连态（口令主机不自动弹凭据框，符合 v1 重连规则）。 */
 export async function restoreSnapshot(hosts: Host[], vaultUnlocked: boolean): Promise<void> {
+  if (tabs.length > 0) return; // 标签仍在（如锁定→解锁）：不重复重建
   let snap: Array<{ position: number; hostId: number }>;
   try {
     snap = (await LayoutService.GetSnapshot()) as never[];

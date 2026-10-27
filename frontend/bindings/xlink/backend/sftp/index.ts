@@ -12,8 +12,10 @@ export {
 } from "./models.js";
 
 export type {
+    LastDirs,
     LocalEntry,
     RemoteEntry,
     Settings,
-    Transfer
+    Transfer,
+    UserDirs
 } from "./models.js";
