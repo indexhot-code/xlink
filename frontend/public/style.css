@@ -66,14 +66,6 @@ button:disabled { opacity: 0.5; cursor: default; }
     width: min(360px, 90vw);
 }
 .hint { color: #6f7a94; font-size: 0.85rem; max-width: 480px; text-align: center; }
-.lock-btn {
-    position: fixed;
-    right: 12px;
-    top: 12px;
-    padding: 0.3rem 0.8rem;
-    background: rgba(255, 255, 255, 0.1);
-}
-
 /* 对话框 */
 .dialog-backdrop {
     position: fixed;
@@ -568,3 +560,5 @@ button.secondary {
     border-radius: 4px;
     margin-bottom: 0.5rem;
 }
+/* 标题栏锁定按钮 */
+.tb-lock { width: auto; padding: 0 0.9rem; font-size: 0.78rem; }
