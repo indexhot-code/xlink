@@ -84,8 +84,22 @@ func run() {
 		MinWidth:       960,
 		MinHeight:      600,
 		BackgroundType: application.BackgroundTypeTranslucent,
+		Frameless:      true, // 无边框：自定义标题栏（原生标题栏在透明材质下清晰度差）
 		Windows: application.WindowsWindow{
 			BackdropType: preferredBackdropType(), // Win11 22621+ → Mica，Win10 → Acrylic
+			Theme:        application.Dark,        // 深色主题：标题栏强制深色
+			CustomTheme: application.ThemeSettings{
+				DarkModeActive: &application.WindowTheme{
+					TitleBarColour:  rgb(0x18, 0x1d, 0x2b), // 不透明标题栏底
+					TitleTextColour: rgb(0xe8, 0xec, 0xf6),
+					BorderColour:    rgb(0x2a, 0x31, 0x44),
+				},
+				DarkModeInactive: &application.WindowTheme{
+					TitleBarColour:  rgb(0x14, 0x18, 0x24),
+					TitleTextColour: rgb(0x9a, 0xa6, 0xc0),
+					BorderColour:    rgb(0x24, 0x2a, 0x3a),
+				},
+			},
 		},
 		URL: "/",
 	})
@@ -122,4 +136,10 @@ func setupTray(app *application.App, win *application.WebviewWindow, setSvc *app
 	tray.SetMenu(menu)
 	tray.OnClick(func() { win.Show() })
 	tray.Show()
+}
+
+// rgb 构造 Windows COLORREF（0x00BBGGRR）。
+func rgb(r, g, b byte) *uint32 {
+	c := uint32(r) | uint32(g)<<8 | uint32(b)<<16
+	return &c
 }

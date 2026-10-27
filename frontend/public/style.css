@@ -407,3 +407,37 @@ button.secondary {
 }
 .ctx-menu button:hover { background: rgba(255, 255, 255, 0.1); }
 .ctx-menu button.danger { color: #f87171; }
+/* 自定义标题栏（无边框窗口） */
+.app-root {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+.app-root .container,
+.app-root .app-shell { flex: 1; min-height: 0; height: auto; }
+.titlebar {
+    --wails-draggable: drag;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    height: 36px;
+    padding-left: 12px;
+    background: #181d2b; /* 不透明深色，确保标题与按钮清晰可读 */
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    user-select: none;
+}
+.tb-title { font-size: 0.82rem; font-weight: 600; color: #e8ecf6; letter-spacing: 0.02em; }
+.tb-flex { flex: 1; height: 100%; }
+.tb-btn {
+    --wails-draggable: no-drag;
+    width: 44px;
+    height: 100%;
+    background: transparent;
+    border: none;
+    color: #c8cede;
+    font-size: 0.9rem;
+    border-radius: 0;
+    padding: 0;
+}
+.tb-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.tb-close:hover { background: #e81123; color: #fff; }

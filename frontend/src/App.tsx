@@ -1,6 +1,7 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import * as ConnectionService from "../bindings/xlink/backend/connection/service.js";
 import TabBar from "./components/TabBar";
+import TitleBar from "./components/TitleBar";
 import HostList from "./components/HostList";
 import SessionArea from "./components/SessionArea";
 import StatusBar from "./components/StatusBar";
@@ -13,9 +14,12 @@ import type { Host } from "../bindings/xlink/backend/connection/models.js";
 /** 应用布局：侧栏（主机）+ 标签条 + 会话区 + 状态栏。启动时按快照恢复标签。 */
 export default function App() {
   return (
-    <VaultGate>
-      <Workspace />
-    </VaultGate>
+    <div className="app-root">
+      <TitleBar />
+      <VaultGate>
+        <Workspace />
+      </VaultGate>
+    </div>
   );
 }
 
