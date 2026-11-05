@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 )
 
 const persistEveryBytes = 1 << 20 // 1MB：偏移持久化间隔
@@ -242,6 +243,8 @@ func (e *engine) OnSessionClosed(sessionID string) {
 }
 
 // list 返回全部任务快照（状态以内存为准，由 setState 维护）。
+// 按 id（自增主键，等于入队顺序）排序：Go map 遍历顺序随机，
+// 不排序会导致前端每 500ms 轮询后队列行序随机跳动。
 func (e *engine) list() []Transfer {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -254,5 +257,6 @@ func (e *engine) list() []Transfer {
 			State: j.state, Error: j.err,
 		})
 	}
+	sort.Slice(out, func(a, b int) bool { return out[a].ID < out[b].ID })
 	return out
 }
