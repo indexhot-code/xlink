@@ -16,6 +16,8 @@ export default function TransferQueue() {
     return w >= MIN_W && w <= MAX_W ? w : 300;
   });
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const followRef = useRef(true);
 
   const onResizerDown = useCallback(
     (e: React.MouseEvent) => {
@@ -66,6 +68,17 @@ export default function TransferQueue() {
     };
   }, []);
 
+  // 自动跟随最新任务：列表更新后吸底；用户上滚查看旧任务时暂停，滚回底部恢复。
+  useEffect(() => {
+    const el = listRef.current;
+    if (el && followRef.current) el.scrollTop = el.scrollHeight;
+  }, [list]);
+
+  const onListScroll = () => {
+    const el = listRef.current;
+    if (el) followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
+
   const act = async (fn: Promise<unknown>) => {
     await fn;
     setList(((await SftpService.ListTransfers()) as never[]) || []);
@@ -78,7 +91,7 @@ export default function TransferQueue() {
       <div className="queue-resizer" title="拖动调整宽度" onMouseDown={onResizerDown} />
       <div className="transfer-queue" style={{ width, flexShrink: 0 }}>
         <div className="queue-head">传输队列</div>
-        <ul>
+        <ul ref={listRef} onScroll={onListScroll}>
           {list.map((t) => {
             const pct = t.size > 0 ? Math.min(100, Math.round((t.transferred / t.size) * 100)) : 0;
             const arrow = t.direction === 1 ? "↑" : "↓";

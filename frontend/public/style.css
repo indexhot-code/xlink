@@ -332,12 +332,14 @@ button.secondary {
 /* 传输队列 */
 .transfer-queue {
     border-top: 1px solid rgba(255, 255, 255, 0.1);
-    max-height: 180px;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     padding: 4px 8px;
 }
-.queue-head { color: #9aa6c0; font-size: 0.8rem; margin-bottom: 4px; }
-.transfer-queue ul { list-style: none; margin: 0; padding: 0; }
+.queue-head { color: #9aa6c0; font-size: 0.8rem; margin-bottom: 4px; flex-shrink: 0; }
+/* 列表占满面板剩余高度，超出行高时仅在列表内部滚动 */
+.transfer-queue ul { list-style: none; margin: 0; padding: 0; flex: 1; min-height: 0; overflow-y: auto; }
 .transfer-queue li {
     display: flex;
     align-items: center;
