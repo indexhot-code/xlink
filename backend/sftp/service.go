@@ -489,10 +489,19 @@ func (s *Service) SaveSettings(ctx context.Context, in Settings) error {
 
 // ---- 队列操作（Binding）----
 
-func (s *Service) Pause(ctx context.Context, id int64) error  { return s.eng.Pause(id) }
-func (s *Service) Resume(ctx context.Context, id int64) error { return s.eng.Resume(ctx, id) }
+func (s *Service) Pause(ctx context.Context, id int64) error { return s.eng.Pause(id) }
+
+// resumeChecked 恢复前校验任务所属会话仍连接，避免重启 worker 后立即再报错（前端表现为无响应）。
+func (s *Service) resumeChecked(ctx context.Context, id int64) error {
+	if j := s.eng.jobLocked(id); j != nil && s.term.GetClient(j.sessionID) == nil {
+		return fmt.Errorf("session %s not connected, reconnect first", j.sessionID)
+	}
+	return s.eng.Resume(ctx, id)
+}
+
+func (s *Service) Resume(ctx context.Context, id int64) error { return s.resumeChecked(ctx, id) }
 func (s *Service) Cancel(ctx context.Context, id int64) error { return s.eng.Cancel(id) }
-func (s *Service) Retry(ctx context.Context, id int64) error  { return s.eng.Resume(ctx, id) }
+func (s *Service) Retry(ctx context.Context, id int64) error  { return s.resumeChecked(ctx, id) }
 
 // OnSessionClosed 标记某会话的运行中任务为 error（连接断开时由终端侧调用）。
 func (s *Service) OnSessionClosed(sessionID string) {

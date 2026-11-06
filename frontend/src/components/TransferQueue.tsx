@@ -80,8 +80,12 @@ export default function TransferQueue() {
   };
 
   const act = async (fn: Promise<unknown>) => {
-    await fn;
-    setList(((await SftpService.ListTransfers()) as never[]) || []);
+    try {
+      await fn;
+      setList(((await SftpService.ListTransfers()) as never[]) || []);
+    } catch (e) {
+      window.alert("操作失败：" + (e instanceof Error ? e.message : String(e)));
+    }
   };
 
   if (list.length === 0) return null;
